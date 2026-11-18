@@ -106,13 +106,16 @@ def overlay(frame: np.ndarray, item: Item, p: Placement, masks: Optional[Dict[st
     return frame
 
 
-def composite_rgba(frame: np.ndarray, rgba: np.ndarray, x0: int, y0: int,
-                   mask: Optional[np.ndarray] = None) -> np.ndarray:
-    """Blend a premultiplied-free RGBA patch (e.g. a rendered 3D item) at (x0, y0)."""
-    h, w = rgba.shape[:2]
+def composite_premultiplied(frame: np.ndarray, bgra: np.ndarray, x0: int, y0: int,
+                            mask: Optional[np.ndarray] = None) -> np.ndarray:
+    """Blend a premultiplied-alpha BGRA patch (a rendered 3D item) at (x0, y0); `mask` (1 = something in front
+    of the item, full-frame) hides parts of it."""
+    h, w = bgra.shape[:2]
     roi = frame[y0:y0 + h, x0:x0 + w]
-    a = rgba[:, :, 3:4].astype(np.float32) / 255.0
+    a = bgra[:, :, 3:4].astype(np.float32) / 255.0
+    rgb = bgra[:, :, :3].astype(np.float32)
     if mask is not None:
-        a *= 1.0 - mask[y0:y0 + h, x0:x0 + w, None]
-    roi[:] = np.clip(rgba[:, :, :3].astype(np.float32) * a + roi.astype(np.float32) * (1 - a), 0, 255).astype(np.uint8)
+        keep = 1.0 - mask[y0:y0 + h, x0:x0 + w, None]
+        a, rgb = a * keep, rgb * keep
+    roi[:] = np.clip(rgb + roi.astype(np.float32) * (1 - a), 0, 255).astype(np.uint8)
     return frame

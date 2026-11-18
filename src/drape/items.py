@@ -52,7 +52,8 @@ class Item:
     anchor: Tuple[float, float] = (0.5, 0.5)
     scale: float = 1.0                     # user tweak on top of the automatic size
     path: Optional[Path] = field(default=None, repr=False)
-    mesh: Optional[object] = field(default=None, repr=False)   # mesh3d.MeshData for 3D items
+    mesh: Optional[object] = field(default=None, repr=False)   # mesh3d.Model3D for 3D items
+    credit: str = ""                       # attribution for downloaded models
 
     @property
     def is_3d(self) -> bool:
@@ -117,7 +118,7 @@ def cutout(img: np.ndarray) -> np.ndarray:
 
 def load(path: str | Path, kind: Optional[str] = None) -> Item:
     """Load an item photo or 3D model. Kind comes from the argument, a sidecar `<name>.json`, or the file name."""
-    from .mesh3d import MESH_EXT, load_mesh
+    from .mesh3d import MESH_EXT, load_model
 
     path = Path(path).expanduser()
     meta = {}
@@ -129,10 +130,8 @@ def load(path: str | Path, kind: Optional[str] = None) -> Item:
         raise ValueError(f"don't know what kind of item '{path.name}' is; pass a kind ({', '.join(KINDS)}) "
                          "or put it in the file name, e.g. gold_necklace.png")
     if path.suffix.lower() in MESH_EXT:
-        if kind not in ("ring", "wrist"):
-            raise ValueError(f"3D models are supported for rings and watches/bracelets, not {kind}")
         return Item(name=meta.get("name", path.stem), kind=kind, rgba=None, scale=float(meta.get("scale", 1.0)),
-                    path=path, mesh=load_mesh(path, meta))
+                    path=path, mesh=load_model(path, kind, meta), credit=meta.get("credit", ""))
     img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError(f"can't read image {path}")
@@ -142,9 +141,13 @@ def load(path: str | Path, kind: Optional[str] = None) -> Item:
 
 
 def load_many(specs: List[str]) -> List[Item]:
-    """Each spec is a file, a folder of images, or 'file:kind'."""
+    """Each spec is a file, a folder of images, 'file:kind', or 'samples' (drape's built-in 3D items)."""
     out: List[Item] = []
-    for spec in specs:
+    for spec in specs or ["samples"]:
+        if spec == "samples" and not Path(spec).exists():
+            from .assets import samples
+            out.extend(samples())
+            continue
         kind = None
         m = re.match(r"^(.*):(" + "|".join(KINDS) + r")$", spec)
         if m:

@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 
 from drape import anchors
-from drape.anchors import Placement, flat
+from drape.anchors import flat
 from drape.items import Item, crop_to_content, cutout, guess_kind, load, load_many, remove_plain_background
-from drape.render import Light, overlay
+from drape.render import Light, composite_premultiplied, overlay
 
 
 # ---------------------------------------------------------------------------------------------- fake landmarks
@@ -34,6 +34,8 @@ def fake_face(cx=320.0, cy=240.0, w=160.0, h=200.0, tilt_deg=0.0, yaw_deg=0.0) -
         anchors.F_FOREHEAD: (0, -h / 2, 0), anchors.F_CHIN: (0, h / 2, 0),
         anchors.F_EYE_R_OUT: (-w * 0.35, -h * 0.1, -20), anchors.F_EYE_L_OUT: (w * 0.35, -h * 0.1, -20),
         anchors.F_BRIDGE: (0, -h * 0.1, -30), anchors.F_TRAGUS_R: (-w / 2, 0, 0), anchors.F_TRAGUS_L: (w / 2, 0, 0),
+        anchors.F_EYE_R_IN: (-w * 0.12, -h * 0.1, -22), anchors.F_EYE_L_IN: (w * 0.12, -h * 0.1, -22),
+        anchors.F_JAW_R: (-w * 0.47, h * 0.2, 0), anchors.F_JAW_L: (w * 0.47, h * 0.2, 0),
     }
     rot = _rot_z(tilt_deg) @ _rot_y(yaw_deg)
     for i, p in pts.items():
@@ -71,10 +73,11 @@ def fake_hand_up(x=300.0, wrist_y=400.0, back_to_camera=True) -> tuple:
 
 
 # ---------------------------------------------------------------------------------------------- face items
-def test_glasses_sit_on_the_bridge_and_follow_head_tilt():
+def test_glasses_sit_in_front_of_the_eyes_and_follow_head_tilt():
     p = anchors.glasses(fake_face())
-    assert (p.x, p.y) == pytest.approx((320, 220), abs=0.5)
-    assert p.width == pytest.approx(1.1 * 160, rel=1e-3)
+    assert (p.x, p.y) == pytest.approx((320, 220), abs=3)
+    assert p.origin[2] < -30                            # in front of the nose bridge
+    assert p.width == pytest.approx((anchors.HEAD_W + anchors.GLASSES_GAP) / anchors.HEAD_W * 160, rel=1e-3)
     assert p.angle == pytest.approx(0, abs=1e-3)
     assert anchors.glasses(fake_face(tilt_deg=15)).angle == pytest.approx(15, abs=0.5)
 
@@ -83,7 +86,7 @@ def test_glasses_foreshorten_when_the_head_turns():
     def screen_width(yaw):
         q = anchors.glasses(fake_face(yaw_deg=yaw)).quad(200, 60, 100, 20)
         return float(q[1, 0] - q[0, 0])
-    assert screen_width(0) == pytest.approx(1.1 * 160, rel=1e-3)
+    assert screen_width(0) == pytest.approx(anchors.glasses(fake_face()).width, rel=1e-3)
     assert screen_width(40) == pytest.approx(screen_width(0) * math.cos(math.radians(40)), rel=0.02)
 
 
@@ -93,7 +96,7 @@ def test_earrings_hang_down_even_when_the_head_tilts():
         assert p.ey == pytest.approx([0, 1, 0])
     assert not r.mirror and l.mirror
     r, l = anchors.earrings(fake_face())
-    assert r.x < 320 - 80 and l.x > 320 + 80 and r.y > 240 and l.y > 240
+    assert r.x < 320 - 70 and l.x > 320 + 70 and r.y > 240 and l.y > 240
 
 
 def test_the_earring_on_the_ear_turning_away_fades_out():
@@ -105,12 +108,17 @@ def test_the_earring_on_the_ear_turning_away_fades_out():
     assert r.opacity == 1 and l.opacity == 0
 
 
-def test_necklace_sits_between_chin_and_shoulders_and_can_be_covered():
+def test_necklace_goes_round_the_base_of_the_neck():
     p = anchors.necklace(fake_pose(), fake_face())
-    assert 340 < p.y < 400 and p.x == pytest.approx(320)
-    assert p.width == pytest.approx(0.46 * 260) and abs(p.angle) < 1e-6
+    ppm = 160 / anchors.HEAD_W
+    neck = p.pose3d.origin
+    assert neck[0] == pytest.approx(320) and neck[1] == pytest.approx(240 + 0.155 * ppm, abs=1)
+    assert p.pose3d.scale[0] == pytest.approx(ppm)
     assert set(p.occlude) == {"hair", "face"}
-    assert anchors.necklace(fake_pose()).y < 400
+    assert p.pose3d.occluders[0][0] == "cylinder"
+    only_body = anchors.necklace(fake_pose(), None).pose3d
+    assert only_body.origin[1] < 400 and only_body.scale[0] == pytest.approx(260 / anchors.SHOULDER_W)
+    assert anchors.necklace(None, None) is None
 
 
 # ---------------------------------------------------------------------------------------------- hand items
@@ -130,7 +138,7 @@ def test_ring_pose_runs_along_the_finger_with_the_stone_on_the_back():
     assert R[1, 2] < -0.5                               # finger axis points up the screen
     assert R[2, 1] < -0.5                               # stone towards the camera
     assert 400 - 140 < p.y < 400 - 92
-    assert len(p.pose3d.others) == 2                    # middle and little finger can cover it
+    assert len(p.pose3d.occluders) == 3                 # the finger, and the middle and little fingers
 
 
 def test_watch_band_is_wider_than_thick():
@@ -141,19 +149,24 @@ def test_watch_band_is_wider_than_thick():
 
 def test_place_needs_the_right_landmarks():
     assert anchors.place("glasses") == []
-    assert anchors.place("necklace", face=fake_face()) == []
+    assert anchors.place("necklace") == []
+    assert len(anchors.place("necklace", face=fake_face())) == 1          # the face alone is enough
     assert len(anchors.place("earrings", face=fake_face())) == 2
     h, lb = fake_hand_up()
     assert len(anchors.place("ring", hands=[h, h], hand_labels=[lb, lb])) == 2
 
 
-def test_smoother_moves_part_way_and_keeps_axes_orthonormal():
-    s = anchors.Smoother(alpha=0.5)
-    s("k", flat(0, 0, 100, 0))
-    p = s("k", flat(10, 0, 100, 90))
-    assert p.x == pytest.approx(5)
-    assert np.linalg.norm(p.ex) == pytest.approx(1) and abs(np.dot(p.ex, p.ey)) < 1e-6
-    assert 30 < p.angle < 60
+def test_one_euro_steadies_jitter_but_follows_real_movement():
+    rng = np.random.default_rng(0)
+    f = anchors.OneEuro()
+    still = [f(np.array([[100.0, 100, 0]]) + rng.normal(0, 2, (1, 3)), k / 30)[0, 0] for k in range(60)]
+    assert np.std(still[20:]) < 1.0                     # jitter of 2 px mostly removed
+    f = anchors.OneEuro()
+    for k in range(30):
+        out = f(np.array([[100.0 + 20 * k, 100, 0]]), k / 30)  # moving 600 px/s
+    assert out[0, 0] > 100 + 20 * 29 - 40               # lags by less than 2 frames
+    f.reset()
+    assert f(np.array([[5.0, 5, 5]]), 10.0)[0, 0] == 5.0
 
 
 # ---------------------------------------------------------------------------------------------- items
@@ -247,25 +260,108 @@ def test_light_follows_the_scene():
     assert t[2] > 1 > t[0]                              # BGR: red up, blue down
 
 
+def test_premultiplied_composite_and_mask():
+    frame = np.full((10, 10, 3), 100, np.uint8)
+    patch = np.zeros((4, 4, 4), np.uint8)
+    patch[:, :2] = (0, 0, 128, 128)                     # half-transparent red, premultiplied
+    mask = np.zeros((10, 10), np.float32)
+    mask[:, 3:] = 1.0                                   # something in front of the right half
+    composite_premultiplied(frame, patch, 2, 2, mask)
+    assert frame[3, 2].tolist() == pytest.approx([50, 50, 178], abs=1)   # 128 + 100 * (1 - 0.5)
+    assert tuple(frame[3, 3]) == (100, 100, 100)        # hidden by the mask
+    assert tuple(frame[3, 5]) == (100, 100, 100)
+
+
 # ---------------------------------------------------------------------------------------------- 3D
 def test_canonicalize_recovers_any_axis_aligned_orientation():
-    trimesh = pytest.importorskip("trimesh")
-    from drape.mesh3d import from_trimesh, sample_ring
+    from drape.jewelry import solitaire_ring
+    from drape.mesh3d import canonicalize, vertex_weights
 
+    model = solitaire_ring()
+    ref, wts = model.vertices(), vertex_weights(model)
+    lo, hi = ref.min(0), ref.max(0)
     rng = np.random.default_rng(1)
     for _ in range(6):
-        m = sample_ring()
         R = np.eye(3)[rng.permutation(3)] * rng.choice([-1, 1], 3)[:, None]
         if np.linalg.det(R) < 0:
             R[0] *= -1
-        T = np.eye(4)
-        T[:3, :3] = R
-        m.apply_transform(T)
-        m.apply_scale(rng.uniform(0.5, 20))
-        m.apply_translation(rng.normal(size=3) * 10)
-        v = from_trimesh(m).vertices
-        assert v.min(0) == pytest.approx([-1.16, -1.16, -0.24], abs=0.02)
-        assert v.max(0) == pytest.approx([1.16, 1.57, 0.24], abs=0.02)
+        v = ref @ R.T * rng.uniform(0.5, 20) + rng.normal(size=3) * 10
+        Rc, c = canonicalize(v, weights=wts)
+        w = (v - c) @ Rc.T
+        assert w.min(0) == pytest.approx(lo, abs=0.03) and w.max(0) == pytest.approx(hi, abs=0.03)
+
+
+def test_jewellery_is_built_to_real_dimensions():
+    from drape import jewelry
+
+    hoop = jewelry.hoop_earring(22).vertices()
+    assert np.ptp(hoop[:, 0]) == pytest.approx(0.024, abs=0.001)         # 22 mm + the 2 mm wire
+    assert hoop[:, 1].min() == pytest.approx(-0.001, abs=0.0005)          # hangs from the piercing
+    for L in (0.45, 0.50, 0.60):
+        p = jewelry.necklace_path(L)
+        assert np.linalg.norm(np.diff(np.vstack([p, p[:1]]), axis=0), axis=1).sum() == pytest.approx(L, rel=0.01)
+    assert jewelry.necklace_path(0.60)[:, 1].max() > jewelry.necklace_path(0.45)[:, 1].max()   # longer hangs lower
+    stone = jewelry.brilliant(0.006)
+    assert np.ptp(stone.v[:, 0]) == pytest.approx(0.006, rel=0.02)
+    assert np.ptp(stone.v[:, 1]) == pytest.approx(0.006 * 0.61, rel=0.03)  # crown + girdle + pavilion
+    ring = jewelry.solitaire_ring().vertices()
+    r = np.hypot(ring[:, 0], ring[:, 1])
+    assert r.min() == pytest.approx(1.0, abs=0.01) and ring[:, 1].max() > 1.5   # stone on the back (+Y)
+
+
+def _write_glasses_gltf(path, transmission=True):
+    """A crude pair of 'glasses' in glTF convention (+Y up, +Z towards the viewer), with a glass lens."""
+    trimesh = pytest.importorskip("trimesh")
+    front = trimesh.creation.box([0.14, 0.04, 0.004])
+    lens = trimesh.creation.box([0.05, 0.03, 0.002])
+    lens.apply_translation([0.03, 0.0, 0.004])
+    arm = trimesh.creation.box([0.004, 0.004, 0.13])
+    arm.apply_translation([0.068, 0.01, -0.065])
+    scene = trimesh.Scene()
+    for name, m in (("front", front), ("lens", lens), ("arm", arm)):
+        m.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
+            name=name, baseColorFactor=[200, 200, 200, 255], metallicFactor=0.0))
+        scene.add_geometry(m, geom_name=name)
+    scene.export(str(path))
+    if transmission:                                    # add the extension trimesh doesn't write
+        import struct
+        raw = bytearray(path.read_bytes())
+        n = struct.unpack("<I", raw[12:16])[0]
+        doc = json.loads(raw[20:20 + n])
+        for m in doc["materials"]:
+            if m["name"] == "lens":
+                m["extensions"] = {"KHR_materials_transmission": {"transmissionFactor": 1.0}}
+        js = json.dumps(doc).encode()
+        js += b" " * (-len(js) % 4)
+        rest = raw[20 + n:]
+        out = raw[:12] + struct.pack("<I", len(js)) + raw[16:20] + js + rest
+        out[8:12] = struct.pack("<I", len(out))
+        path.write_bytes(bytes(out))
+
+
+def test_glasses_model_is_put_in_the_metric_frame(tmp_path):
+    from drape.mesh3d import load_model
+
+    f = tmp_path / "specs.glb"
+    _write_glasses_gltf(f)
+    m = load_model(f, "glasses")
+    v = m.vertices()
+    assert m.frame == "metric" and m.info["width"] == pytest.approx(0.14, abs=0.002)
+    assert v[:, 2].min() == pytest.approx(0.0, abs=1e-6)       # attach point at the front...
+    assert v[:, 2].max() > 0.12                                # ...and the arms go back, away from the viewer
+    lens = [p for p in m.prims if p.mat.name == "lens"][0]
+    assert lens.mat.blend and lens.mat.base[3] < 0.3           # glass is see-through
+
+
+def test_load_any_kind_of_3d_item(tmp_path):
+    from drape.items import load
+
+    f = tmp_path / "specs.glb"
+    _write_glasses_gltf(f, transmission=False)
+    assert load(f, "glasses").is_3d
+    (tmp_path / "specs.json").write_text(json.dumps({"kind": "glasses", "credit": "me"}))
+    it = load(f)
+    assert it.kind == "glasses" and it.credit == "me"
 
 
 @pytest.fixture(scope="module")
@@ -280,32 +376,46 @@ def renderer():
     r.close()
 
 
-def _ring_frame(back_to_camera: bool, renderer):
-    import trimesh  # noqa: F401
-    from drape.mesh3d import from_trimesh, sample_ring
+def _ring_patch(back_to_camera: bool, renderer):
+    from drape.jewelry import solitaire_ring
 
     h, label = fake_hand_up(back_to_camera=back_to_camera)
     p = anchors.ring(h, label)
-    out = renderer.render((480, 640, 3), from_trimesh(sample_ring(), [0, 0, 1], [0, 1, 0], 1.0), p.pose3d)
+    out = renderer.render((480, 640, 3), solitaire_ring(), p.pose3d)
     assert out is not None
-    patch, x0, y0 = out
-    return patch, x0, y0, p
+    return out[0], out[1], out[2], p
 
 
 def test_3d_ring_shows_its_stone_on_the_back_of_the_hand_only(renderer):
     def stone_pixels(back):
-        patch, x0, y0, p = _ring_frame(back, renderer)
+        patch, x0, y0, p = _ring_patch(back, renderer)
         b, g, r, a = [patch[:, :, i].astype(int) for i in range(4)]
-        whiteish = (a > 200) & (b > 150) & (np.abs(r - b) < 60)     # the pale stone, not the gold band
-        return int(whiteish.sum())
+        neutral = (a > 200) & (np.abs(r - b) < 40)                # the colourless stone, not the gold
+        return int(neutral.sum())
     assert stone_pixels(True) > 10
     assert stone_pixels(False) < stone_pixels(True) / 4
 
 
-def test_3d_ring_band_is_hidden_behind_the_finger(renderer):
-    patch, x0, y0, p = _ring_frame(True, renderer)
+def test_3d_ring_band_crosses_the_front_of_the_finger(renderer):
+    patch, x0, y0, p = _ring_patch(True, renderer)
     alpha = patch[:, :, 3] > 128
-    # the band's front arc is visible but the ring isn't drawn as a full closed loop over the finger
     assert alpha.sum() > 30
-    cy, cx = int(p.y) - y0, int(p.x) - x0
-    assert alpha[cy, cx]                                  # the front of the band crosses the finger centre
+    assert alpha[int(p.y) - y0, int(p.x) - x0]
+
+
+def test_the_head_hides_the_far_earring(renderer):
+    from drape.jewelry import hoop_earring
+
+    hoop = hoop_earring()
+
+    def visible(yaw):
+        r, l = anchors.earrings(fake_face(w=300, h=380, yaw_deg=yaw))
+        out = []
+        for p in (r, l):
+            res = renderer.render((480, 640, 3), hoop, p.pose3d)
+            out.append(0 if res is None else int((res[0][:, :, 3] > 128).sum()))
+        return out
+    r0, l0 = visible(0)
+    assert r0 > 20 and l0 > 20
+    r1, l1 = visible(50)                                 # right ear turned away
+    assert r1 < r0 / 3 and l1 > 20

@@ -1,7 +1,7 @@
 [project]
 name = "drape"
-version = "0.2.0"
-description = "Try on jewellery, glasses and watches from your own photos or 3D models, live on your webcam. Runs locally."
+version = "0.3.0"
+description = "Try on jewellery, glasses and watches live on your webcam: realistic 3D models or photos of your own items. Runs locally."
 readme = "README.md"
 license = "Apache-2.0"
 authors = [{ name = "Yash Gupta" }]

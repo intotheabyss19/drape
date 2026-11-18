@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Set
@@ -69,6 +70,7 @@ class Tracker:
         self._t0 = time.monotonic()
         self._last_ts = -1
         self.face = self.pose = self.hand = self.seg = None
+        self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="drape-track")
         if "face" in parts:
             self.face = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
                 base_options=BaseOptions(model_asset_path=str(model_path("face"))), running_mode=mode, num_faces=1))
@@ -84,7 +86,8 @@ class Tracker:
                 base_options=BaseOptions(model_asset_path=str(model_path("seg"))), running_mode=mode,
                 output_category_mask=True, output_confidence_masks=False))
 
-    def __call__(self, bgr: np.ndarray) -> Landmarks:
+    def __call__(self, bgr: np.ndarray, need: Optional[Set[str]] = None) -> Landmarks:
+        """Run the trackers in `need` (default: all that were loaded)."""
         import mediapipe as mp
 
         h, w = bgr.shape[:2]
@@ -96,27 +99,34 @@ class Tracker:
         def run(det):
             return det.detect_for_video(img, ts) if self.video else det.detect(img)
 
+        jobs = {}                                    # the models are independent: run them at the same time
+        for name, det in (("face", self.face), ("pose", self.pose), ("hand", self.hand)):
+            if det is not None and (need is None or name in need):
+                jobs[name] = self._pool.submit(run, det)
+        if self.seg is not None and (need is None or "seg" in need):
+            jobs["seg"] = self._pool.submit(
+                lambda: self.seg.segment_for_video(img, ts) if self.video else self.seg.segment(img))
+        res = {k: f.result() for k, f in jobs.items()}
+
         out = Landmarks()
-        if self.face is not None:
-            r = run(self.face)
-            if r.face_landmarks:
-                out.face = _px(r.face_landmarks[0], w, h)
-        if self.pose is not None:
-            r = run(self.pose)
-            if r.pose_landmarks:
-                out.pose = _px(r.pose_landmarks[0], w, h)
-        if self.hand is not None:
-            r = run(self.hand)
+        r = res.get("face")
+        if r is not None and r.face_landmarks:
+            out.face = _px(r.face_landmarks[0], w, h)
+        r = res.get("pose")
+        if r is not None and r.pose_landmarks:
+            out.pose = _px(r.pose_landmarks[0], w, h)
+        r = res.get("hand")
+        if r is not None:
             out.hands = [_px(lms, w, h) for lms in (r.hand_landmarks or [])]
             out.hand_labels = [(c[0].category_name if c else "") for c in (r.handedness or [])]
-        if self.seg is not None:
-            r = self.seg.segment_for_video(img, ts) if self.video else self.seg.segment(img)
-            if r.category_mask is not None:
-                m = r.category_mask.numpy_view()
-                out.seg = m if m.shape[:2] == (h, w) else cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+        r = res.get("seg")
+        if r is not None and r.category_mask is not None:
+            m = np.squeeze(r.category_mask.numpy_view())
+            out.seg = m if m.shape[:2] == (h, w) else cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
         return out
 
     def close(self) -> None:
+        self._pool.shutdown(wait=True)
         for d in (self.face, self.pose, self.hand, self.seg):
             if d is not None:
                 d.close()
