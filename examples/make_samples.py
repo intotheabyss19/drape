@@ -1,5 +1,6 @@
 """Draw the sample items in examples/items/ (simple, original artwork so the repo ships with no licensed images).
-Saved as JPEGs on a white background on purpose, to exercise drape's background removal.
+Saved as JPEGs on a white background on purpose, to exercise drape's background removal. Also writes a 3D
+ring and watch (.glb) built from simple shapes.
 
     uv run python examples/make_samples.py
 """
@@ -84,3 +85,6 @@ if __name__ == "__main__":
                      ("diamond_ring", ring), ("steel_watch", watch)]:
         cv2.imwrite(str(OUT / f"{name}.jpg"), fn(), [cv2.IMWRITE_JPEG_QUALITY, 92])
         print("wrote", OUT / f"{name}.jpg")
+    from drape.mesh3d import write_samples          # 3D ring and watch (.glb + settings .json)
+    write_samples(OUT)
+    print("wrote 3D samples: gold_ring_3d.glb, leather_watch_3d.glb")

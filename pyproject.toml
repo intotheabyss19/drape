@@ -1,7 +1,7 @@
 [project]
 name = "drape"
-version = "0.1.0"
-description = "Try on jewellery, glasses and watches from your own photos, live on your webcam. Runs locally."
+version = "0.2.0"
+description = "Try on jewellery, glasses and watches from your own photos or 3D models, live on your webcam. Runs locally."
 readme = "README.md"
 license = "Apache-2.0"
 authors = [{ name = "Yash Gupta" }]
@@ -9,7 +9,10 @@ requires-python = ">=3.10"
 keywords = ["virtual try-on", "augmented reality", "mediapipe", "jewellery", "webcam"]
 dependencies = [
     "mediapipe>=0.10.14",   # brings opencv-contrib-python
+    "moderngl>=5.8",
     "numpy>=1.26",
+    "scipy>=1.10",
+    "trimesh>=4.0",
 ]
 
 [project.optional-dependencies]

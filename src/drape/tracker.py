@@ -22,10 +22,12 @@ MODELS = {
     "face": "face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
     "pose": "pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task",
     "hand": "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+    "seg": "image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite",
 }
+SEG_HAIR, SEG_BODY_SKIN, SEG_FACE_SKIN, SEG_CLOTHES = 1, 2, 3, 4
 BASE = "https://storage.googleapis.com/mediapipe-models/"
-NEEDS = {"glasses": {"face"}, "earrings": {"face"}, "necklace": {"pose", "face"}, "ring": {"hand"},
-         "wrist": {"hand"}}
+NEEDS = {"glasses": {"face"}, "earrings": {"face", "seg"}, "necklace": {"pose", "face", "seg"},
+         "ring": {"hand"}, "wrist": {"hand"}}
 
 
 def model_dir() -> Path:
@@ -45,13 +47,15 @@ def model_path(name: str) -> Path:
 
 @dataclass
 class Landmarks:
-    face: Optional[np.ndarray] = None          # (478, 3) pixels (z unscaled)
+    face: Optional[np.ndarray] = None          # (478, 3) pixels; z (relative depth) in the same pixel scale
     pose: Optional[np.ndarray] = None          # (33, 3)
     hands: List[np.ndarray] = field(default_factory=list)   # each (21, 3)
+    hand_labels: List[str] = field(default_factory=list)    # MediaPipe handedness per hand ("Left"/"Right")
+    seg: Optional[np.ndarray] = None           # (H, W) uint8 classes: 0 background, 1 hair, 2 body skin, ...
 
 
 def _px(lms, w: int, h: int) -> np.ndarray:
-    return np.array([[lm.x * w, lm.y * h, lm.z] for lm in lms], dtype=np.float32)
+    return np.array([[lm.x * w, lm.y * h, lm.z * w] for lm in lms], dtype=np.float32)
 
 
 class Tracker:
@@ -64,7 +68,7 @@ class Tracker:
         self.video = video
         self._t0 = time.monotonic()
         self._last_ts = -1
-        self.face = self.pose = self.hand = None
+        self.face = self.pose = self.hand = self.seg = None
         if "face" in parts:
             self.face = vision.FaceLandmarker.create_from_options(vision.FaceLandmarkerOptions(
                 base_options=BaseOptions(model_asset_path=str(model_path("face"))), running_mode=mode, num_faces=1))
@@ -75,6 +79,10 @@ class Tracker:
             self.hand = vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions(
                 base_options=BaseOptions(model_asset_path=str(model_path("hand"))), running_mode=mode,
                 num_hands=max_hands))
+        if "seg" in parts:
+            self.seg = vision.ImageSegmenter.create_from_options(vision.ImageSegmenterOptions(
+                base_options=BaseOptions(model_asset_path=str(model_path("seg"))), running_mode=mode,
+                output_category_mask=True, output_confidence_masks=False))
 
     def __call__(self, bgr: np.ndarray) -> Landmarks:
         import mediapipe as mp
@@ -100,10 +108,16 @@ class Tracker:
         if self.hand is not None:
             r = run(self.hand)
             out.hands = [_px(lms, w, h) for lms in (r.hand_landmarks or [])]
+            out.hand_labels = [(c[0].category_name if c else "") for c in (r.handedness or [])]
+        if self.seg is not None:
+            r = self.seg.segment_for_video(img, ts) if self.video else self.seg.segment(img)
+            if r.category_mask is not None:
+                m = r.category_mask.numpy_view()
+                out.seg = m if m.shape[:2] == (h, w) else cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
         return out
 
     def close(self) -> None:
-        for d in (self.face, self.pose, self.hand):
+        for d in (self.face, self.pose, self.hand, self.seg):
             if d is not None:
                 d.close()
 

@@ -33,7 +33,7 @@ _KIND_WORDS = [
     ("ring", r"rings?"),
     ("wrist", r"watch(?:es)?|bracelets?|bangles?|kadas?|wristbands?|cuffs?"),
 ]
-IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".glb", ".gltf", ".obj", ".stl", ".ply"}
 
 
 def guess_kind(name: str) -> Optional[str]:
@@ -48,10 +48,15 @@ def guess_kind(name: str) -> Optional[str]:
 class Item:
     name: str
     kind: str
-    rgba: np.ndarray                       # cut-out, cropped, BGRA uint8
+    rgba: Optional[np.ndarray]             # cut-out, cropped, BGRA uint8 (None for a 3D item)
     anchor: Tuple[float, float] = (0.5, 0.5)
     scale: float = 1.0                     # user tweak on top of the automatic size
     path: Optional[Path] = field(default=None, repr=False)
+    mesh: Optional[object] = field(default=None, repr=False)   # mesh3d.MeshData for 3D items
+
+    @property
+    def is_3d(self) -> bool:
+        return self.mesh is not None
 
     @property
     def anchor_px(self) -> Tuple[float, float]:
@@ -111,7 +116,9 @@ def cutout(img: np.ndarray) -> np.ndarray:
 
 
 def load(path: str | Path, kind: Optional[str] = None) -> Item:
-    """Load an item photo. Kind comes from the argument, a sidecar `<name>.json`, or the file name."""
+    """Load an item photo or 3D model. Kind comes from the argument, a sidecar `<name>.json`, or the file name."""
+    from .mesh3d import MESH_EXT, load_mesh
+
     path = Path(path).expanduser()
     meta = {}
     side = path.with_suffix(".json")
@@ -121,6 +128,11 @@ def load(path: str | Path, kind: Optional[str] = None) -> Item:
     if kind not in KINDS:
         raise ValueError(f"don't know what kind of item '{path.name}' is; pass a kind ({', '.join(KINDS)}) "
                          "or put it in the file name, e.g. gold_necklace.png")
+    if path.suffix.lower() in MESH_EXT:
+        if kind not in ("ring", "wrist"):
+            raise ValueError(f"3D models are supported for rings and watches/bracelets, not {kind}")
+        return Item(name=meta.get("name", path.stem), kind=kind, rgba=None, scale=float(meta.get("scale", 1.0)),
+                    path=path, mesh=load_mesh(path, meta))
     img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError(f"can't read image {path}")

@@ -1,6 +1,6 @@
-"""drape: try on jewellery, glasses and watches from your own photos, live on your webcam.
+"""drape: try on jewellery, glasses and watches from your own photos or 3D models, live on your webcam.
 
-  drape live  ITEM [ITEM ...]          live camera try-on (items are image files, folders, or file:kind)
+  drape live  ITEM [ITEM ...]          live camera try-on (items: images, .glb models, folders, or file:kind)
   drape photo PHOTO ITEM [...] -o OUT  try items on a still photo
   drape kinds                          list the kinds of items drape understands
 
@@ -36,7 +36,8 @@ def cmd_photo(a) -> int:
     if frame is None:
         print(f"can't read {a.photo}", file=sys.stderr)
         return 2
-    s = Session(load_many(a.items), video=False, wearing=list(range(len(a.items))) if a.all else None)
+    s = Session(load_many(a.items), video=False, wearing=list(range(len(a.items))) if a.all else None,
+                realism=not a.simple)
     out = s.render(frame)
     s.close()
     lm = s.last
@@ -55,7 +56,7 @@ def cmd_live(a) -> int:
     from .session import Session
 
     items = load_many(a.items)
-    s = Session(items, video=True)
+    s = Session(items, video=True, realism=not a.simple)
     cap = cv2.VideoCapture(a.camera)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, a.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, a.height)
@@ -126,6 +127,7 @@ def main(argv=None) -> int:
     lv.add_argument("--camera", type=int, default=0)
     lv.add_argument("--width", type=int, default=1280)
     lv.add_argument("--height", type=int, default=720)
+    lv.add_argument("--simple", action="store_true", help="no occlusion, scene lighting or shadows (faster)")
     lv.set_defaults(fn=cmd_live)
 
     ph = sub.add_parser("photo", help="try items on a still photo")
@@ -133,6 +135,7 @@ def main(argv=None) -> int:
     ph.add_argument("items", nargs="+")
     ph.add_argument("-o", "--output")
     ph.add_argument("--all", action="store_true", help="wear every item given, not one per kind")
+    ph.add_argument("--simple", action="store_true", help="no occlusion, scene lighting or shadows")
     ph.set_defaults(fn=cmd_photo)
 
     kd = sub.add_parser("kinds", help="list item kinds")
