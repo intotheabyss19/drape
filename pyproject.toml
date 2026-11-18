@@ -1,0 +1,29 @@
+[project]
+name = "drape"
+version = "0.1.0"
+description = "Try on jewellery, glasses and watches from your own photos, live on your webcam. Runs locally."
+readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "Yash Gupta" }]
+requires-python = ">=3.10"
+keywords = ["virtual try-on", "augmented reality", "mediapipe", "jewellery", "webcam"]
+dependencies = [
+    "mediapipe>=0.10.14",   # brings opencv-contrib-python
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+rembg = ["rembg[cpu]>=2.0"]   # better background removal for item photos on busy backgrounds
+
+[project.scripts]
+drape = "drape.cli:main"
+
+[project.urls]
+Repository = "https://github.com/intotheabyss19/drape"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
