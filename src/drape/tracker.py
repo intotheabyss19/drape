@@ -46,6 +46,9 @@ def model_path(name: str) -> Path:
     return p
 
 
+SHOULDERS = (11, 12)
+
+
 @dataclass
 class Landmarks:
     face: Optional[np.ndarray] = None          # (478, 3) pixels; z (relative depth) in the same pixel scale
@@ -114,7 +117,10 @@ class Tracker:
             out.face = _px(r.face_landmarks[0], w, h)
         r = res.get("pose")
         if r is not None and r.pose_landmarks:
-            out.pose = _px(r.pose_landmarks[0], w, h)
+            lms = r.pose_landmarks[0]
+            if all((lms[i].visibility or 0) > 0.5 and -0.05 < lms[i].x < 1.05 and lms[i].y < 1.05
+                   for i in SHOULDERS):              # else the model is guessing (it keeps "tracking" a body that
+                out.pose = _px(lms, w, h)            # has left the frame, and the necklace lands on your head)
         r = res.get("hand")
         if r is not None:
             out.hands = [_px(lms, w, h) for lms in (r.hand_landmarks or [])]

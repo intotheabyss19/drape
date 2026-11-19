@@ -419,3 +419,24 @@ def test_the_head_hides_the_far_earring(renderer):
     assert r0 > 20 and l0 > 20
     r1, l1 = visible(50)                                 # right ear turned away
     assert r1 < r0 / 3 and l1 > 20
+
+
+def test_camera_thread_hands_out_new_frames_then_stops():
+    from drape.cli import _camera
+
+    class FakeCap:
+        def __init__(self):
+            self.n = 0
+
+        def read(self):
+            self.n += 1
+            if self.n > 5:
+                return False, None
+            return True, np.full((2, 2, 3), self.n, np.uint8)
+
+    cam = _camera(FakeCap())
+    got = []
+    while (f := cam.read()) is not None:
+        got.append(int(f[0, 0, 0]))
+    cam.close()
+    assert got and got == sorted(set(got)) and got[-1] == 5     # never the same frame twice, ends with the last

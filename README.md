@@ -30,8 +30,9 @@ Built-in items (more welcome):
 Your own items can be **3D models** (`.glb`, `.gltf`, `.obj`, `.stl`, `.ply`; most realistic) or **photos**
 (a product shot on a plain background; quick, but flat).
 
-Runs in real time: about 40 frames a second with glasses, earrings, a necklace, a ring and a watch on, at
-1280x720 on an Apple M5 Pro (tracking ~18 ms, drawing ~7 ms per frame).
+Runs in real time: the camera's full 30 frames a second with glasses, earrings, a necklace, and a ring and
+a watch on each hand, at 1280x720 on an Apple M5 Pro (tracking ~18 ms, drawing ~16 ms, overlapped with reading
+the camera and showing the previous frame).
 
 ## How it works
 
@@ -72,7 +73,11 @@ uv run drape live                                    # the built-in items
 uv run drape live ~/models/ my_specs.glb:glasses kundan_necklace.jpg samples
 uv run drape photo me.jpg -o me_dressed.jpg          # try the built-in items on a photo
 uv run drape samples                                 # list the built-in items and their credits
+uv run drape live --record ~/drape-rec --seconds 60  # save a camera frame and the result each second
 ```
+
+If something looks wrong, `--record` saves what the camera saw next to what drape drew, with a log of timings
+and what was tracked: attach a few of those frames to an issue.
 
 Live keys: **1-9** put on / take off an item, **n / p** next / previous item of the same kind, **+ / -**
 bigger / smaller, **s** save a snapshot to `~/Pictures/drape`, **f** flip the mirror view, **h** hide the help,

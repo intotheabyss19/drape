@@ -28,7 +28,7 @@ class Light:
         small = cv2.resize(frame, (64, 36), interpolation=cv2.INTER_AREA).reshape(-1, 3).astype(np.float32)
         mean = small.mean(axis=0) + 1.0                                           # BGR
         lum = float(0.114 * mean[0] + 0.587 * mean[1] + 0.299 * mean[2]) / 255.0
-        gain = float(np.clip(np.sqrt(lum / 0.42), 0.7, 1.1))
+        gain = float(np.clip((lum / 0.42) ** 0.75, 0.35, 1.1))
         tint = np.clip(mean / mean.mean(), 0.85, 1.2)
         return gain, tint
 

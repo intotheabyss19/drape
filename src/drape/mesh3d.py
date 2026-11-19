@@ -401,6 +401,7 @@ uniform int shading;            // 0 pbr, 1 gem, 2 pearl
 uniform bool blend;
 uniform float exposure;
 uniform vec3 light;             // camera-matched gain * tint (linear RGB)
+uniform float spec_gain;        // reflections dim further in a dim room (our studio isn't your room)
 uniform float env_yaw;
 in vec3 v_n;
 in vec2 v_uv;
@@ -476,6 +477,7 @@ void main() {
         }
     }
     float a = blend ? base.a : 1.0;
+    spec *= spec_gain;
     vec3 lit = (diff * a + spec) * exposure * light;
     vec3 c = pow(aces(lit), vec3(1.0 / 2.2));
     float lum = dot(pow(aces(spec * exposure * light), vec3(1.0 / 2.2)), vec3(0.3, 0.6, 0.1));
@@ -547,7 +549,10 @@ class MeshRenderer:
         white = np.full((1, 1, 4), 255, np.uint8)
         self._white = self.ctx.texture((1, 1), 4, white.tobytes())
 
-    def set_env(self, env: np.ndarray) -> None:
+    def set_env(self, env: np.ndarray, peak: float = 20.0) -> None:
+        # Cap the studio lights at `peak` x the average: a real studio's softbox is ~200x, and mirrored in a lens
+        # it becomes a white sticker in any room. Capped, metals still glint and lenses get a soft sheen.
+        env = np.minimum(env, peak * float(env.mean()))
         pre = prefilter(env)
         L, H, W, _ = pre.shape
         tex = self.ctx.texture_array((W, H, L), 3, pre.astype("f4").tobytes(), dtype="f4")
@@ -651,6 +656,7 @@ class MeshRenderer:
         p["env_yaw"].value = self.env_yaw
         tint = np.asarray(tint, float)[::-1]                     # BGR -> RGB
         p["light"].value = tuple(float(gain) * (0.7 + 0.3 * tint))
+        p["spec_gain"].value = float(min(gain, 1.0))
         self.env.use(0)
         p["env"].value = 0
         p["base_tex"].value = 1

@@ -12,9 +12,12 @@ Live keys: 1-9 put on / take off item, n / p next / previous item, + / - bigger 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -67,6 +70,55 @@ def _panel(frame, lines) -> None:
         cv2.putText(frame, line, (12, 22 + lh * k), font, scale, (255, 255, 255), 1, cv2.LINE_AA)
 
 
+class _Latest:
+    """Runs `produce` over and over on its own thread and hands out the newest result. The live view chains two:
+    the camera, and tracking + drawing. So reading the camera, processing a frame and showing the previous one
+    overlap instead of taking turns (taking turns, 27 ms of processing plus ~13 ms for the window turned a
+    30 fps camera into 15 fps). `produce` returns None when there's nothing more."""
+
+    def __init__(self, produce) -> None:
+        self.produce, self._val, self._n, self._seen, self.ok = produce, None, 0, 0, True
+        self.error: Optional[BaseException] = None
+        self._cv = threading.Condition()
+        self._t = threading.Thread(target=self._run, daemon=True)
+        self._t.start()
+
+    def _run(self) -> None:
+        while self.ok:
+            try:
+                v = self.produce()
+            except BaseException as e:  # noqa: BLE001 (re-raised by read() instead of dying silently)
+                v, self.error = None, e
+            with self._cv:
+                if v is None:
+                    self.ok = False
+                else:
+                    self._val, self._n = v, self._n + 1
+                self._cv.notify_all()
+
+    def read(self, timeout: float = 2.0):
+        """The newest result not handed out yet (waits for it), or None when the producer has stopped."""
+        with self._cv:
+            self._cv.wait_for(lambda: self._n != self._seen or not self.ok, timeout=timeout)
+            if self._n == self._seen:
+                if self.error is not None:
+                    raise self.error
+                return None
+            self._seen = self._n
+            return self._val
+
+    def close(self) -> None:
+        self.ok = False
+        self._t.join(timeout=2.0)
+
+
+def _camera(cap) -> _Latest:
+    def grab():
+        ok, frame = cap.read()
+        return frame if ok else None
+    return _Latest(grab)
+
+
 def cmd_samples(a) -> int:
     from .assets import asset_dir, samples
 
@@ -91,27 +143,57 @@ def cmd_live(a) -> int:
         print("can't open the camera (on macOS, allow camera access for your terminal app in "
               "System Settings > Privacy & Security > Camera)", file=sys.stderr)
         return 2
-    mirror, show_help, fps, t_prev = True, True, 0.0, time.monotonic()
+    show_help, fps, t_prev = True, 0.0, time.monotonic()
+    state = {"mirror": True}
+    t_start, t_rec, n_rec, log = t_prev, 0.0, 0, None
+    if a.record:                                   # a frame a second, raw and dressed, for bug reports
+        rec = Path(a.record).expanduser()
+        rec.mkdir(parents=True, exist_ok=True)
+        log = open(rec / "log.jsonl", "a")  # noqa: SIM115 (closed in the finally below)
+        print("recording to", rec)
     win = "drape"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+    cam = _camera(cap)
+
+    def process():                                 # on the worker thread (which also owns the OpenGL context)
+        frame = cam.read()
+        if frame is None:
+            return None
+        if state["mirror"]:
+            frame = cv2.flip(frame, 1)
+        raw = frame.copy() if log else None
+        s.render(frame)
+        lm = s.last
+        return frame, raw, dict(s.timing), list(s.wearing), lm
+
+    work = _Latest(process)
     try:
         while True:
-            ok, frame = cap.read()
-            if not ok:
+            got = work.read()
+            if got is None:
                 break
-            if mirror:
-                frame = cv2.flip(frame, 1)
-            s.render(frame)
+            frame, raw, timing, wearing, lm = got
             clean = frame.copy()                       # snapshot without the help text
             now = time.monotonic()
             fps = 0.9 * fps + 0.1 * (1.0 / max(now - t_prev, 1e-3))
             t_prev = now
             if show_help:
-                t = s.timing
-                lines = [f"{fps:4.1f} fps  (tracking {t.get('track', 0):.0f} ms, drawing {t.get('draw', 0):.0f} ms)"]
-                lines += [("* " if i in s.wearing else "  ") + f"{i + 1}. {it.name}" for i, it in enumerate(items[:9])]
+                lines = [(f"{fps:4.1f} fps  (tracking {timing.get('track', 0):.0f} ms, "
+                          f"drawing {timing.get('draw', 0):.0f} ms)")]
+                lines += [("* " if i in wearing else "  ") + f"{i + 1}. {it.name}" for i, it in enumerate(items[:9])]
                 lines += ["  ".join(HELP)]
                 _panel(frame, lines)
+            if log and now - t_rec >= a.every:
+                t_rec, n_rec = now, n_rec + 1
+                cv2.imwrite(str(rec / f"{n_rec:04d}_raw.jpg"), raw, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                cv2.imwrite(str(rec / f"{n_rec:04d}_out.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                log.write(json.dumps({"n": n_rec, "t": round(now - t_start, 2), "fps": round(fps, 1),
+                                      **{k: round(v, 1) for k, v in timing.items()},
+                                      "wearing": [items[i].name for i in wearing], "face": lm.face is not None,
+                                      "pose": lm.pose is not None, "hands": lm.hand_labels}) + "\n")
+                log.flush()
+            if a.seconds and now - t_start > a.seconds:
+                break
             cv2.imshow(win, frame)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
@@ -127,7 +209,7 @@ def cmd_live(a) -> int:
             elif key == ord("-"):
                 s.resize(1 / 1.08)
             elif key == ord("f"):
-                mirror = not mirror
+                state["mirror"] = not state["mirror"]
                 s.reset_smoothing()
             elif key == ord("h"):
                 show_help = not show_help
@@ -136,8 +218,12 @@ def cmd_live(a) -> int:
                 cv2.imwrite(str(path), clean)
                 print("saved", path)
     finally:
+        work.close()
+        cam.close()
         cap.release()
         cv2.destroyAllWindows()
+        if log:
+            log.close()
         s.close()
     return 0
 
@@ -154,6 +240,10 @@ def main(argv=None) -> int:
     lv.add_argument("--width", type=int, default=1280)
     lv.add_argument("--height", type=int, default=720)
     lv.add_argument("--simple", action="store_true", help="no occlusion, scene lighting or shadows (faster)")
+    lv.add_argument("--record", metavar="DIR", help="save the camera frame and the result every --every "
+                                                  "seconds, with a log, to DIR (for bug reports)")
+    lv.add_argument("--every", type=float, default=1.0, help="seconds between recorded frames (default 1)")
+    lv.add_argument("--seconds", type=float, default=0, help="stop after this many seconds")
     lv.set_defaults(fn=cmd_live)
 
     ph = sub.add_parser("photo", help="try items on a still photo")

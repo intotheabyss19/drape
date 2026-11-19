@@ -108,6 +108,12 @@ class Session:
             masks["hair"] = cv2.GaussianBlur((seg == SEG_HAIR).astype(np.float32), (5, 5), 0)
         if "cover" in need and seg is not None:
             masks["cover"] = cv2.GaussianBlur(((seg == SEG_HAIR) | (seg == SEG_OTHER)).astype(np.float32), (5, 5), 0)
+        if "head" in need and lm.face is not None:
+            # The outline of the whole face mesh, not its edge points: the tracker places the points it can't see
+            # too, so when you turn, the far edge of the face oval lies inside your visible cheek.
+            m = np.zeros(frame.shape[:2], np.float32)
+            cv2.fillConvexPoly(m, cv2.convexHull(lm.face[:, :2].astype(np.int32)), 1.0, cv2.LINE_AA)
+            masks["head"] = cv2.GaussianBlur(m, (5, 5), 0)
         if "face" in need and lm.face is not None:
             m = np.zeros(frame.shape[:2], np.float32)
             cv2.fillPoly(m, [lm.face[anchors.FACE_OVAL, :2].astype(np.int32)], 1.0, cv2.LINE_AA)
@@ -142,9 +148,9 @@ class Session:
             self.light.update(frame)
         for it, slot, p in plan:
             occ = p.occlude
-            if it.kind == "earrings":
-                r = max(2, int(0.15 * p.width))
-                occ = ("cover",) if self._covered(masks, p, r) else ()
+            if it.kind == "earrings":                  # the face is always in front of the lobe; hair and
+                r = max(2, int(0.15 * p.width))          # headphones only when they cover the lobe itself
+                occ = ("head", "cover") if self._covered(masks, p, r) else ("head",)
             mask = None
             for name in occ:
                 m = masks.get(name)

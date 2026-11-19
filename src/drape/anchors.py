@@ -195,7 +195,7 @@ def earrings(face: np.ndarray) -> List[Placement]:
         side = _ortho(np.array([ex[0], 0.0, ex[2]]), DOWN) if abs(ex[0]) + abs(ex[2]) > 1e-6 else np.array([1.0, 0, 0])
         opacity = float(np.clip((0.5 - away) / 0.25, 0.0, 1.0))
         out.append(Placement(lobe, side, DOWN.copy(), 0.018 * ppm, mirror=mirror, opacity=opacity,
-                             pose3d=Pose3D(lobe, Re, np.full(3, ppm), occ), occlude=("cover",)))
+                             pose3d=Pose3D(lobe, Re, np.full(3, ppm), occ), occlude=("head", "cover")))
     return out
 
 
@@ -297,7 +297,7 @@ class OneEuro:
     """One Euro filter (Casiez et al., 2012) on landmark arrays: heavy smoothing when still (no jitter), light
     smoothing when moving fast (no lag). Speeds are per landmark, in pixels per second."""
 
-    def __init__(self, min_cutoff: float = 1.2, beta: float = 0.015, d_cutoff: float = 1.0) -> None:
+    def __init__(self, min_cutoff: float = 1.2, beta: float = 0.03, d_cutoff: float = 2.0) -> None:
         self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
         self._x: Optional[np.ndarray] = None
         self._dx: Optional[np.ndarray] = None
