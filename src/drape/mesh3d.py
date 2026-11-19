@@ -25,7 +25,7 @@ import numpy as np
 from .anchors import Pose3D
 
 MESH_EXT = {".glb", ".gltf", ".obj", ".stl", ".ply"}
-METRIC_KINDS = {"glasses", "earrings", "necklace"}
+METRIC_KINDS = {"glasses", "earrings", "necklace", "helmet"}
 GLTF_TO_OURS = np.diag([1.0, -1.0, -1.0])   # glTF: +Y up, +Z towards the viewer -> ours: +Y down, +Z away
 
 
@@ -50,12 +50,13 @@ class Primitive:
     mat: Material
     uv: Optional[np.ndarray] = None  # (N, 2)
     col: Optional[np.ndarray] = None # (N, 3) linear vertex colours
+    version: int = 0                 # bump after changing v/n in place (same vertex count): re-uploaded
 
 
 @dataclass
 class Model3D:
     prims: List[Primitive]
-    frame: str = "band"              # "band" or "metric"
+    frame: str = "band"              # "band", "metric", or "pixels" (already placed in the frame: gauntlets)
     info: Dict[str, float] = field(default_factory=dict)   # e.g. glasses: front "width" in metres
 
     def vertices(self) -> np.ndarray:
@@ -303,6 +304,9 @@ def load_model(path: Path, kind: str, meta: Optional[dict] = None) -> Model3D:
     elif kind == "earrings":
         top = v[v[:, 1] <= v[:, 1].min() + 0.002]
         c = np.array([top[:, 0].mean(), v[:, 1].min(), top[:, 2].mean()])
+    elif kind == "helmet":                                         # the middle of its box ~ the head's centre
+        c = (v.min(axis=0) + v.max(axis=0)) / 2
+        model.info["helmet_width"] = float(np.ptp(v[:, 0]))
     else:
         c = np.zeros(3)
     if "attach" in meta:
@@ -588,19 +592,26 @@ class MeshRenderer:
             self._tex[key] = (img, t)
         return self._tex[key][1]
 
+    @staticmethod
+    def _vertex_data(p: Primitive) -> bytes:
+        n = len(p.v)
+        uv = p.uv if p.uv is not None else np.zeros((n, 2), np.float32)
+        col = p.col if p.col is not None else np.ones((n, 3), np.float32)
+        return np.hstack([p.v, p.n, uv, col]).astype("f4").tobytes()
+
     def _prim_vao(self, p: Primitive):
         key = id(p)
         if key not in self._vaos:
-            n = len(p.v)
-            uv = p.uv if p.uv is not None else np.zeros((n, 2), np.float32)
-            col = p.col if p.col is not None else np.ones((n, 3), np.float32)
-            data = np.hstack([p.v, p.n, uv, col]).astype("f4")
-            vbo = self.ctx.buffer(data.tobytes())
+            vbo = self.ctx.buffer(self._vertex_data(p))
             ibo = self.ctx.buffer(np.asarray(p.f, "u4").tobytes())
             vao = self.ctx.vertex_array(self.prog, [(vbo, "3f 3f 2f 3f", "in_pos", "in_nrm", "in_uv", "in_col")],
                                         index_buffer=ibo, index_element_size=4)
-            self._vaos[key] = [p, vao]                  # keep p alive so id() stays unique
-        return self._vaos[key][1]
+            self._vaos[key] = [p, vao, vbo, p.version]  # keep p alive so id() stays unique
+        entry = self._vaos[key]
+        if entry[3] != p.version:                       # moved since last upload (gauntlets, every frame)
+            entry[2].write(self._vertex_data(p))
+            entry[3] = p.version
+        return entry[1]
 
     @staticmethod
     def _proj(w: int, h: int) -> np.ndarray:

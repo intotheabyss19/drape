@@ -36,7 +36,7 @@ P_SHOULDER_L, P_SHOULDER_R = 11, 12
 H_WRIST, H_INDEX_MCP, H_MIDDLE_MCP, H_MIDDLE_PIP, H_RING_MCP, H_RING_PIP, H_PINKY_MCP, H_PINKY_PIP = \
     0, 5, 9, 10, 13, 14, 17, 18
 
-KINDS = ("necklace", "earrings", "glasses", "ring", "wrist")
+KINDS = ("necklace", "earrings", "glasses", "ring", "wrist", "helmet", "gloves")
 DOWN = np.array([0.0, 1.0, 0.0])
 
 # Typical adult dimensions (metres)
@@ -44,6 +44,7 @@ HEAD_W = 0.140          # between face-mesh points 234 and 454 (the sides of the
 SHOULDER_W = 0.37       # between the pose shoulder points
 NECK_R = 0.062          # where a necklace rests round the base of the neck
 GLASSES_GAP = 0.004     # glasses' front is this much wider than the face
+HELMET_W = 0.196        # a helmet's outside width
 
 # ---------------------------------------------------------------------------------------------- types
 @dataclass
@@ -84,7 +85,9 @@ class Placement:
     mirror: bool = False
     opacity: float = 1.0
     pose3d: Optional[Pose3D] = None
-    occlude: Tuple[str, ...] = ()   # masks that may hide it: "hair", "face"
+    occlude: Tuple[str, ...] = ()   # masks that may hide it: "hair", "face", "head", "cover", "hands"
+    hand: Optional[np.ndarray] = None   # gloves: the hand's landmarks (the glove is built round them)
+    label: str = ""
 
     @property
     def x(self) -> float:
@@ -273,6 +276,28 @@ def wrist(hand: np.ndarray, label: str = "") -> Placement:
     return Placement(c, ex, _ortho(-axis, ex), 1.05 * palm_w, pose3d=pose)
 
 
+def helmet(face: np.ndarray) -> Placement:
+    """Centred on the head (where the skull occluder is), turned with it. The head and neck are drawn into the
+    depth buffer so the inside of the helmet never shows through the neck opening; hands in front hide it."""
+    R, ppm = head(face)
+    mid = (_p(face, F_TRAGUS_R) + _p(face, F_TRAGUS_L)) / 2
+    c = mid + R[:, 2] * 0.012 * ppm - R[:, 1] * 0.01 * ppm
+    ex, ey = R[:, 0], R[:, 1]
+    neck_axes = np.stack([ex, R[:, 2], ey], axis=1)
+    occ = [head_occluder(face),
+           ("cylinder", affine(neck_axes, (0.055 * ppm, 0.055 * ppm, 0.14 * ppm), c + ey * 0.16 * ppm))]
+    return Placement(c, ex, ey, HELMET_W * ppm, pose3d=Pose3D(c, R, np.full(3, ppm), occ), occlude=("hands",))
+
+
+def gloves(hand: np.ndarray, label: str = "") -> Placement:
+    w, m = _p(hand, H_WRIST), _p(hand, H_MIDDLE_MCP)
+    palm_w = float(np.linalg.norm(_p(hand, H_INDEX_MCP) - _p(hand, H_PINKY_MCP)))
+    ey = _unit(w - m)
+    ex = _ortho(np.array([1.0, 0, 0]), ey)
+    return Placement(w, ex, ey, 1.3 * palm_w, pose3d=Pose3D(np.zeros(3), np.eye(3), np.ones(3)),
+                     hand=np.asarray(hand, float), label=label)
+
+
 def place(kind: str, face=None, pose=None, hands: Optional[Sequence[np.ndarray]] = None,
           hand_labels: Optional[Sequence[str]] = None) -> List[Placement]:
     """All placements for an item kind given whatever landmarks were found (empty list = can't place)."""
@@ -289,6 +314,10 @@ def place(kind: str, face=None, pose=None, hands: Optional[Sequence[np.ndarray]]
         return [ring(h, lb) for h, lb in zip(hands, labels)]
     if kind == "wrist":
         return [wrist(h, lb) for h, lb in zip(hands, labels)]
+    if kind == "helmet" and face is not None:
+        return [helmet(face)]
+    if kind == "gloves":
+        return [gloves(h, lb) for h, lb in zip(hands, labels)]
     return []
 
 

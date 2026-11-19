@@ -6,7 +6,7 @@
   drape samples                        download the built-in models and list them (with credits)
   drape kinds                          list the kinds of items drape understands
 
-Live keys: 1-9 put on / take off item, n / p next / previous item, + / - bigger / smaller,
+Live keys: 1-9 and 0 put on / take off item, n / p next / previous item, + / - bigger / smaller,
            s save a snapshot, f flip mirror view, h show/hide help, q or Esc quit.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from . import __version__
 from .anchors import KINDS
 from .items import load_many
 
-HELP = ["1-9 wear/remove", "n/p next/prev", "+/- size", "s snapshot", "f mirror", "h help", "q quit"]
+HELP = ["1-9,0 wear/remove", "n/p next/prev", "+/- size", "s snapshot", "f mirror", "h help", "q quit"]
 
 
 def _snap_dir() -> Path:
@@ -180,7 +180,8 @@ def cmd_live(a) -> int:
             if show_help:
                 lines = [(f"{fps:4.1f} fps  (tracking {timing.get('track', 0):.0f} ms, "
                           f"drawing {timing.get('draw', 0):.0f} ms)")]
-                lines += [("* " if i in wearing else "  ") + f"{i + 1}. {it.name}" for i, it in enumerate(items[:9])]
+                lines += [("* " if i in wearing else "  ") + f"{(i + 1) % 10}. {it.name}"
+                          for i, it in enumerate(items[:10])]
                 lines += ["  ".join(HELP)]
                 _panel(frame, lines)
             if log and now - t_rec >= a.every:
@@ -200,6 +201,8 @@ def cmd_live(a) -> int:
                 break
             if ord("1") <= key <= ord("9"):
                 s.toggle(key - ord("1"))
+            elif key == ord("0"):
+                s.toggle(9)
             elif key == ord("n"):
                 s.cycle(1)
             elif key == ord("p"):

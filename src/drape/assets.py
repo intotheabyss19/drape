@@ -91,11 +91,12 @@ def environment() -> Optional[np.ndarray]:
 
 def samples(download: bool = True) -> list:
     """The built-in items, in a sensible order (one of each kind is worn by default)."""
+    from .armour import SAMPLES as ARMOUR
     from .items import Item
     from .jewelry import SAMPLES
     from .mesh3d import load_model
 
-    built = {name: Item(name=name, kind=kind, rgba=None, mesh=fn()) for name, kind, fn in SAMPLES}
+    built = {name: Item(name=name, kind=kind, rgba=None, mesh=fn()) for name, kind, fn in SAMPLES + ARMOUR}
     got = {}
     if download:
         for name, spec in DOWNLOADS.items():
@@ -106,6 +107,7 @@ def samples(download: bool = True) -> list:
             except Exception as e:
                 print(f"skipping {name}: {e}")
     order = ["sunglasses", "pearl drop earrings", "gold chain with diamond", "diamond solitaire ring",
-             "chronograph watch", "round spectacles", "gold hoop earrings", "pearl necklace"]
+             "chronograph watch", "armour helmet", "armour gauntlets", "round spectacles", "gold hoop earrings",
+             "pearl necklace"]
     items: List = [x for n in order for x in [built.get(n) or got.get(n)] if x is not None]
     return items + [x for x in list(built.values()) + list(got.values()) if x not in items]

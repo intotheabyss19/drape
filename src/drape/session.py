@@ -13,6 +13,11 @@ from .render import Light, composite_premultiplied, overlay
 from .tracker import SEG_HAIR, Landmarks, Tracker, parts_for
 
 SEG_OTHER = 5          # MediaPipe multiclass segmenter: accessories (headphones, hats, ...)
+OPT_IN = {"helmet", "gloves"}                       # not put on by default
+UNDER_HELMET = {"glasses", "earrings"}              # hidden inside a helmet: not drawn while one is worn
+DRAW_ORDER = {"necklace": 0, "earrings": 1, "glasses": 2, "helmet": 3, "ring": 4, "wrist": 5, "gloves": 6}
+_BONES = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8), (9, 10), (10, 11), (11, 12),
+          (13, 14), (14, 15), (15, 16), (0, 17), (17, 18), (18, 19), (19, 20), (5, 9), (9, 13), (13, 17)]
 
 
 class Session:
@@ -23,10 +28,10 @@ class Session:
         self.items = items
         self.video = video
         self.realism = realism            # occlusion, scene lighting and shadows
-        if wearing is None:               # default: wear the first item of each kind
+        if wearing is None:               # default: the first item of each kind (armour only when asked for)
             seen, wearing = set(), []
             for i, it in enumerate(items):
-                if it.kind not in seen:
+                if it.kind not in seen and (it.kind not in OPT_IN or len({x.kind for x in items}) == 1):
                     seen.add(it.kind)
                     wearing.append(i)
         self.wearing: List[int] = list(wearing)
@@ -114,6 +119,16 @@ class Session:
             m = np.zeros(frame.shape[:2], np.float32)
             cv2.fillConvexPoly(m, cv2.convexHull(lm.face[:, :2].astype(np.int32)), 1.0, cv2.LINE_AA)
             masks["head"] = cv2.GaussianBlur(m, (5, 5), 0)
+        if "hands" in need and lm.hands:
+            # your hands in front of you (a helmet must not cover a hand raised in front of the face)
+            m = np.zeros(frame.shape[:2], np.float32)
+            for h in lm.hands:
+                pts = h[:, :2].astype(np.int32)
+                th = max(3, int(0.3 * np.linalg.norm(h[5, :2] - h[17, :2])))
+                cv2.fillConvexPoly(m, cv2.convexHull(pts[[0, 1, 2, 5, 9, 13, 17]]), 1.0, cv2.LINE_AA)
+                for a, b in _BONES:
+                    cv2.line(m, tuple(int(x) for x in pts[a]), tuple(int(x) for x in pts[b]), 1.0, th, cv2.LINE_AA)
+            masks["hands"] = cv2.GaussianBlur(m, (7, 7), 0)
         if "face" in need and lm.face is not None:
             m = np.zeros(frame.shape[:2], np.float32)
             cv2.fillPoly(m, [lm.face[anchors.FACE_OVAL, :2].astype(np.int32)], 1.0, cv2.LINE_AA)
@@ -138,8 +153,11 @@ class Session:
         self.last = lm
         t1 = time.perf_counter()
         plan = []
-        for idx in self.wearing:
+        helmet_on = any(self.items[i].kind == "helmet" for i in self.wearing)
+        for idx in sorted(self.wearing, key=lambda i: DRAW_ORDER.get(self.items[i].kind, 9)):
             it = self.items[idx]
+            if helmet_on and it.kind in UNDER_HELMET:
+                continue
             for slot, p in enumerate(anchors.place(it.kind, face=lm.face, pose=lm.pose, hands=lm.hands,
                                                    hand_labels=lm.hand_labels)):
                 plan.append((it, slot, p))
@@ -157,7 +175,7 @@ class Session:
                 if m is not None:
                     mask = m if mask is None else np.maximum(mask, m)
             if it.is_3d and p.pose3d is not None:
-                self._draw_3d(frame, it, p, mask)
+                self._draw_3d(frame, it, p, mask, slot)
             else:
                 overlay(frame, it, anchors.replace(p, occlude=occ), masks=masks,
                         light=self.light if self.realism else None, shadow=self.realism)
@@ -171,11 +189,16 @@ class Session:
             self._mesh = MeshRenderer(environment())
         return self._mesh
 
-    def _draw_3d(self, frame: np.ndarray, it: Item, p: anchors.Placement, mask) -> None:
+    def _draw_3d(self, frame: np.ndarray, it: Item, p: anchors.Placement, mask, slot: int = 0) -> None:
         model = it.mesh
         fit = 1.0
+        if it.kind == "gloves":                          # rebuilt round this hand, already in pixels
+            model = it.mesh.posed(p.hand, p.label, slot, it.scale)
+            fit = 1.0 / it.scale
         if it.kind == "glasses" and model.info.get("width"):
             fit = (anchors.HEAD_W + anchors.GLASSES_GAP) / model.info["width"]
+        if it.kind == "helmet" and model.info.get("helmet_width"):
+            fit = anchors.HELMET_W / model.info["helmet_width"]
         gain, tint = (self.light.gain, self.light.tint) if self.realism else (1.0, np.ones(3))
         out = self._renderer().render(frame.shape, model, p.pose3d, fit * it.scale, gain, tint)
         if out is not None:

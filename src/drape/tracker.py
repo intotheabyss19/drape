@@ -28,7 +28,7 @@ MODELS = {
 SEG_HAIR, SEG_BODY_SKIN, SEG_FACE_SKIN, SEG_CLOTHES = 1, 2, 3, 4
 BASE = "https://storage.googleapis.com/mediapipe-models/"
 NEEDS = {"glasses": {"face"}, "earrings": {"face", "seg"}, "necklace": {"pose", "face", "seg"},
-         "ring": {"hand"}, "wrist": {"hand"}}
+         "ring": {"hand"}, "wrist": {"hand"}, "helmet": {"face", "hand"}, "gloves": {"hand"}}
 
 
 def model_dir() -> Path:

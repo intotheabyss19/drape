@@ -24,6 +24,8 @@ DEFAULT_ANCHOR = {
     "glasses": (0.5, 0.38),   # the bridge sits between the eyes
     "ring": (0.5, 0.5),
     "wrist": (0.5, 0.5),
+    "helmet": (0.5, 0.5),     # a photo of a helmet or mask: its middle on the middle of the head
+    "gloves": (0.5, 0.5),
 }
 
 _KIND_WORDS = [
@@ -32,6 +34,8 @@ _KIND_WORDS = [
     ("glasses", r"glasses|sunglasses|spectacles|specs|shades|eyewear|frames?"),
     ("ring", r"rings?"),
     ("wrist", r"watch(?:es)?|bracelets?|bangles?|kadas?|wristbands?|cuffs?"),
+    ("helmet", r"helmets?|masks?|helms?|visors?"),
+    ("gloves", r"gloves?|gauntlets?|mittens?"),
 ]
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".glb", ".gltf", ".obj", ".stl", ".ply"}
 
@@ -129,6 +133,9 @@ def load(path: str | Path, kind: Optional[str] = None) -> Item:
     if kind not in KINDS:
         raise ValueError(f"don't know what kind of item '{path.name}' is; pass a kind ({', '.join(KINDS)}) "
                          "or put it in the file name, e.g. gold_necklace.png")
+    if kind == "gloves":
+        raise ValueError(f"{path.name}: gloves have to bend with your fingers, so only drape's built-in "
+                         "gauntlets work for now (your own gloves would need a rigged model)")
     if path.suffix.lower() in MESH_EXT:
         return Item(name=meta.get("name", path.stem), kind=kind, rgba=None, scale=float(meta.get("scale", 1.0)),
                     path=path, mesh=load_model(path, kind, meta), credit=meta.get("credit", ""))

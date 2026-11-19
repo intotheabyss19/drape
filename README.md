@@ -1,6 +1,7 @@
 # drape
 
-Try on jewellery, glasses and watches live on your webcam: realistic 3D models, or photos of your own items.
+Try on jewellery, glasses, watches, helmets and gauntlets live on your webcam: realistic 3D models, or photos
+of your own items.
 Everything runs on your machine: no account, no upload, no cloud.
 
 ![drape: pearl drops and a gold chain; aviators, gold hoops and pearls; a diamond ring and chronograph on the back of a hand, and from the palm side](docs/demo.jpg)
@@ -13,7 +14,8 @@ dial only on the back of the hand, and the earrings hanging straight down.</sub>
 ## What it does
 
 `drape live` opens your camera and puts the items on you: glasses on your nose in 3D, earrings hanging from
-your ear lobes, a necklace round your neck, a ring on your ring finger and a watch on your wrist. They follow
+your ear lobes, a necklace round your neck, a ring on your ring finger and a watch on your wrist. The armour
+(press 6 and 7) is a full helmet that turns with your head and gauntlets that follow every finger. They follow
 you as you move and turn, at real-world sizes.
 
 Built-in items (more welcome):
@@ -26,6 +28,8 @@ Built-in items (more welcome):
 | Gold chain with a diamond pendant, pearl strand | necklace | built by drape (46 cm cable chain, 45 cm strand of 7 mm pearls) |
 | Diamond solitaire | ring | built by drape (2.2 mm band, 0.5 ct round brilliant, four prongs) |
 | Chronograph watch | wrist | Khronos glTF Sample Assets, CC-BY 4.0, downloaded on first run |
+| Armour helmet | helmet | built by drape: painted shell, chevron visor, gunmetal jaw, ear pods |
+| Armour gauntlets | gloves | built by drape: a plate on every finger bone, so they bend with your fingers |
 
 Your own items can be **3D models** (`.glb`, `.gltf`, `.obj`, `.stl`, `.ply`; most realistic) or **photos**
 (a product shot on a plain background; quick, but flat).
@@ -79,9 +83,10 @@ uv run drape live --record ~/drape-rec --seconds 60  # save a camera frame and t
 If something looks wrong, `--record` saves what the camera saw next to what drape drew, with a log of timings
 and what was tracked: attach a few of those frames to an issue.
 
-Live keys: **1-9** put on / take off an item, **n / p** next / previous item of the same kind, **+ / -**
+Live keys: **1-9** and **0** put on / take off an item, **n / p** next / previous item of the same kind, **+ / -**
 bigger / smaller, **s** save a snapshot to `~/Pictures/drape`, **f** flip the mirror view, **h** hide the help,
-**q** quit. You can wear one item per kind at a time (say a necklace, earrings and glasses together).
+**q** quit. You can wear one item per kind at a time (say a necklace, earrings and glasses together); glasses and earrings
+go away while you wear a helmet.
 The panel shows the frame rate and which items you're wearing. `--simple` turns off occlusion, scene lighting
 and shadows.
 
@@ -116,6 +121,10 @@ see-through glass) or vertex colours.
   to the width of your face.
 - **Earrings**: +Y up, real size; they hang from their topmost point (or set `"attach": [x, y, z]`).
 - **Necklaces**: +Y up, real size, modelled round a neck whose centre is the origin (or set `"attach"`).
+- **Helmets and masks**: +Y up, facing +Z, any units: scaled to about 20 cm wide, and the middle of the
+  model goes on the middle of the head (or set `"attach"`). A photo of a mask works too (flat, on the face).
+- **Gloves**: only the built-in gauntlets for now. A glove has to bend with every finger, which needs a rigged
+  (skinned) model; support for those is on the roadmap.
 
 Every material can be overridden with `"metallic"` and `"roughness"` in the sidecar, and `"credit"` records
 where the model came from.
@@ -124,7 +133,9 @@ where the model came from.
 
 Contributions are very welcome, especially on these:
 
-- [ ] **Gloves**: warp a glove image over the whole hand (piecewise warp on the hand landmarks).
+- [x] Helmets and gauntlets (rigid plates per finger bone).
+- [ ] **Rigged gloves**: glTF skinned glove models driven by the hand landmarks, and glove photos warped over
+  the hand.
 - [x] Occlusion by head, neck, fingers, hair and headphones; 3D head pose; physically based materials and
   lighting; 3D models for every kind.
 - [ ] **Measured placement**: a small labelled photo set to fit the placement proportions and report accuracy.
@@ -146,7 +157,7 @@ uv run pytest
 
 The pieces are small and separate: `anchors.py` (where items sit and what hides them; pure 3D geometry,
 unit-tested with fake landmarks), `mesh3d.py` (loading models, physically based OpenGL rendering),
-`jewelry.py` (the built-in jewellery), `assets.py` (downloads and credits), `items.py` (loading items, cutting
+`jewelry.py` (the built-in jewellery), `armour.py` (the helmet and gauntlets), `assets.py` (downloads and credits), `items.py` (loading items, cutting
 out photos), `render.py` (photo items, lighting match, compositing), `tracker.py` (MediaPipe), `session.py`
 (what's worn, smoothing, masks) and `cli.py`. 3D tests skip themselves where there's no OpenGL.
 

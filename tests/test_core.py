@@ -440,3 +440,83 @@ def test_camera_thread_hands_out_new_frames_then_stops():
         got.append(int(f[0, 0, 0]))
     cam.close()
     assert got and got == sorted(set(got)) and got[-1] == 5     # never the same frame twice, ends with the last
+
+
+# ---------------------------------------------------------------------------------------------- helmet and gloves
+def test_helmet_model_is_head_sized_and_centred():
+    from drape.armour import helmet
+
+    m = helmet()
+    v = m.vertices()
+    assert m.frame == "metric"
+    width = float(np.ptp(v[:, 0]))
+    assert 0.18 < width < 0.25                                    # a little wider than a head
+    assert v[:, 1].min() < -0.13 and v[:, 1].max() > 0.12         # crown above, chin below the centre
+    assert abs(float(v[:, 0].mean())) < 0.005                     # symmetric
+    assert any(p.mat.name == "visor" for p in m.prims)
+    visor = next(p for p in m.prims if p.mat.name == "visor")
+    assert visor.v[:, 2].max() < 0                                # the visor is on the front
+
+
+def test_helmet_follows_the_head_and_hides_its_inside():
+    face = fake_face(yaw_deg=25)
+    p = anchors.helmet(face)
+    R, ppm = anchors.head(face)
+    assert np.allclose(p.pose3d.R, R) and np.allclose(p.pose3d.scale, ppm)
+    assert [s for s, _ in p.pose3d.occluders] == ["sphere", "cylinder"]   # skull and neck
+    assert "hands" in p.occlude
+    assert anchors.place("helmet", face=face) and not anchors.place("helmet")
+
+
+def test_gauntlet_is_one_mesh_that_moves_with_the_hand():
+    from drape.armour import Gauntlet
+
+    g = Gauntlet()
+    h, label = fake_hand_up()
+    m1 = g.posed(h, label, slot=0)
+    v1 = m1.vertices().copy()
+    versions = [p.version for p in m1.prims]
+    m2 = g.posed(h + np.array([50.0, 0, 0]), label, slot=0)
+    assert [p.version for p in m2.prims] == [v + 1 for v in versions]   # same buffers, re-uploaded
+    assert np.allclose(m2.vertices(), v1 + np.array([50.0, 0, 0]), atol=1e-3)
+    lo, hi = v1.min(axis=0), v1.max(axis=0)                       # covers every landmark of the hand
+    assert np.all(h[:, :2] >= lo[:2]) and np.all(h[:, :2] <= hi[:2])
+    assert m1.prims is not g.posed(h, label, slot=1).prims        # a second hand gets its own buffers
+
+
+def test_gauntlet_keeps_its_size_on_a_side_on_hand():
+    from drape.armour import Gauntlet
+
+    g = Gauntlet()
+    h, label = fake_hand_up()
+    side = h.copy()
+    side[:, 0] = h[0, 0] + (h[:, 0] - h[0, 0]) * 0.05             # seen edge-on: the knuckles line up
+    w_front = np.ptp(g.posed(h, label).vertices()[:, 1])
+    w_side = np.ptp(g.posed(side, label).vertices()[:, 1])
+    assert w_side > 0.7 * w_front
+
+
+def test_gloves_and_helmets_kinds_from_names_and_files(tmp_path):
+    from drape.items import guess_kind, load
+
+    assert guess_kind("space helmet") == "helmet" and guess_kind("party mask") == "helmet"
+    assert guess_kind("leather gloves") == "gloves" and guess_kind("steel gauntlet") == "gloves"
+    f = tmp_path / "my_gloves.png"
+    f.write_bytes(b"x")
+    with pytest.raises(ValueError, match="built-in gauntlets"):
+        load(f)
+
+
+def test_3d_gauntlet_renders_over_the_hand(renderer):
+    from drape.armour import Gauntlet
+
+    h, label = fake_hand_up()
+    p = anchors.gloves(h, label)
+    out = renderer.render((480, 640, 3), Gauntlet().posed(h, label), p.pose3d)
+    assert out is not None
+    patch, x0, y0 = out
+    covered = 0
+    for x, y in h[:, :2].astype(int):
+        if 0 <= y - y0 < patch.shape[0] and 0 <= x - x0 < patch.shape[1]:
+            covered += patch[y - y0, x - x0, 3] > 200
+    assert covered >= 19                                          # nearly every joint is under armour
